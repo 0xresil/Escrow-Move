@@ -5,6 +5,7 @@ module Escrow::Escrow {
   use aptos_framework::coin;
   use aptos_framework::aptos_coin::AptosCoin;
   use aptos_framework::timestamp;
+  use aptos_framework::event::{Self, EventHandle};
 
   //
   // Constants
@@ -61,7 +62,7 @@ module Escrow::Escrow {
       // coins in escrow
       escrow_coins: coin::Coin<AptosCoin>
   }
-
+  
   //
   // View Functions
   //

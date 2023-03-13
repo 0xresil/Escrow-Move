@@ -1,120 +1,128 @@
-
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.8.0;
 
 contract Escrow {
     address payable public owner;
+    address payable private commissionWallet;
+    address payable public buyer;
+    address payable public seller;
+
     uint256 private minimumEscrowAmount;
     uint256 private commissionRate;
-    address payable private commissionWallet;
+    uint256 private depositTime;
+
     enum State {
         INIT,
         FUNDED,
         ACCEPTED,
         RELEASED,
         REFUNDED,
-        WITHDRAWED_BY_OWNER
+        WITHDRAWN_BY_OWNER
     }
-    address payable public buyer;
-    address payable public seller;
-    State private currentState;
-    uint256 private depositTime;
 
-    event Funded(address buyer, uint256 amount, State status);
-    event Accepted(address buyer, address seller, State status);
+    State private currentState;
+
+    event Funded(address escrowWallet);
+    event Accepted(address escrowWallet, address seller);
     event ReleaseFund(
-        address buyer,
-        address seller,
-        State status,
-        uint256 amount_released
+        address released_by,
+        address escrowWallet,
+        uint256 amount_released,
+        uint256 commission_amount
     );
-    event Withdraw(address _buyer, uint256 amount, State status);
-    event SixMonths(address _destAddr, uint256 amount_withdrawn);
+    event Withdraw(
+        address _buyer,
+        address escrowWallet,
+        uint256 amount_withdrawn,
+        uint256 commission_amount
+    );
+    event SixMonths(
+        address _destAddr,
+        address escrowWallet,
+        uint256 amount_withdrawn
+    );
 
     modifier isAddressValid(address addr) {
         require(
             addr.code.length == 0 && addr != address(0x0),
-            "Invalid address!"
+            "Escrow: Invalid address!"
         );
         _;
     }
 
-    modifier buyerOnly(address _buyer) {
-        require(_buyer == buyer, "Only accessible by buyer!");
+    modifier buyerOnly(address addr) {
+        require(addr == buyer, "Escrow: Only accessible by buyer!");
         _;
     }
 
-    modifier sellerOnly() {
-        require(msg.sender == seller, "Only accessible by seller!");
+    modifier notOwner() {
+        require(msg.sender != owner, "Escrow: Not accessible by owner!");
         _;
     }
 
-    modifier ownerOnly() {
-        require(owner == msg.sender, "Only accessible by owner!");
+    modifier notCommissionWallet(address addr) {
+        require(
+            addr != commissionWallet,
+            "Escrow: Can not be commission wallet!"
+        );
         _;
     }
 
-    modifier buyerOrSellerOnly() {
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Escrow: Only accessible by owner!");
+        _;
+    }
+
+    modifier onlyBuyerOrSeller() {
         require(
             msg.sender == buyer || msg.sender == seller,
-            "Invalid message sender!"
+            "Escrow: Only accessible by buyer or seller!"
         );
-        _;
-    }
-
-    modifier initByOwner() {
-        require(owner != address(0x0), "Deal not initialized yet!");
         _;
     }
 
     modifier initCheck() {
-        require(owner == address(0x0), "Can't initialize a deal twice!");
+        require(
+            owner == address(0x0),
+            "Escrow: Can not initialize a deal twice!"
+        );
         _;
     }
 
     modifier stateInit() {
-        require(currentState == State.INIT, "State's not INIT!");
+        require(
+            currentState == State.INIT,
+            "Escrow: Deal state is no longer INIT!"
+        );
         _;
     }
 
     modifier stateFunded() {
-        require(currentState == State.FUNDED, "Deal not funded yet!");
+        require(
+            currentState == State.FUNDED,
+            "Escrow: Deal state is no longer FUNDED!"
+        );
         _;
     }
 
     modifier stateAccepted() {
-        require(currentState == State.ACCEPTED, "Deal not accepted yet!");
+        require(
+            currentState == State.ACCEPTED,
+            "Escrow: Deal state is no longer ACCEPTED!"
+        );
         _;
     }
 
     modifier minimumAmount() {
         require(
             msg.value >= minimumEscrowAmount,
-            "Value less than minimum amount required!"
+            "Escrow: Value less than minimum amount required!"
         );
         _;
     }
 
-    modifier partiesDefined() {
-        require(
-            buyer != address(0x0) && seller != address(0x0),
-            "Escrow parties not set yet!"
-        );
-        _;
-    }
-
-    modifier dealCommissionRate(uint256 comm_rate) {
-        require(comm_rate <= 100 && comm_rate > 0, "Invalid commission rate!");
-        _;
-    }
-
-    modifier differentWalletAddresses(address _buyer, address _seller) {
-        require(
-            _buyer != _seller &&
-                _buyer != commissionWallet &&
-                _seller != commissionWallet,
-            "Buyer, seller & commission wallets, must all be different!"
-        );
+    modifier distinctAddresses(address _addr1, address _addr2) {
+        require(_addr1 != _addr2, "Escrow: Addresses can not be the same!");
         _;
     }
 
@@ -126,49 +134,52 @@ contract Escrow {
         _;
     }
 
-    function initializeDeal(
+    function initialize(
         address payable _commissionWallet,
         uint256 _minimumEscrowAmount,
         uint256 _commissionRate,
-        address payable _owner
-    ) public initCheck isAddressValid(_commissionWallet) {
+        address payable _owner,
+        address payable _buyer
+    )
+        public
+        initCheck
+        isAddressValid(_commissionWallet)
+        distinctAddresses(_buyer, owner)
+        notCommissionWallet(_owner)
+        notCommissionWallet(_buyer)
+    {
         commissionWallet = _commissionWallet;
         minimumEscrowAmount = _minimumEscrowAmount;
         commissionRate = _commissionRate;
         owner = _owner;
-    }
-
-    function escrowParties(address payable _buyer, address payable _seller)
-        public
-        initByOwner
-        isAddressValid(_buyer)
-        isAddressValid(_seller)
-        differentWalletAddresses(_buyer, _seller)
-        differentWalletAddresses(_buyer, owner)
-    {
         buyer = payable(_buyer);
-        seller = _seller;
     }
 
-    function deposit()
+    function deposit(address _buyer)
         public
         payable
         stateInit
-        partiesDefined
-        buyerOnly(msg.sender)
+        buyerOnly(_buyer)
         minimumAmount
     {
         currentState = State.FUNDED;
-        emit Funded(msg.sender, msg.value, State.FUNDED);
+        emit Funded(address(this));
         depositTime = block.timestamp;
     }
 
-    function acceptDeal() public stateFunded sellerOnly {
+    function acceptDeal()
+        public
+        notOwner
+        stateFunded
+        distinctAddresses(buyer, msg.sender)
+        notCommissionWallet(msg.sender)
+    {
+        seller = payable(msg.sender);
         currentState = State.ACCEPTED;
-        emit Accepted(buyer, msg.sender, State.ACCEPTED);
+        emit Accepted(address(this), seller);
     }
 
-    function releaseFund() public stateAccepted buyerOrSellerOnly {
+    function releaseFund() public stateAccepted onlyBuyerOrSeller {
         (
             uint256 amountAfterCommission,
             uint256 commissionAmount
@@ -178,7 +189,12 @@ contract Escrow {
             : buyer.transfer(amountAfterCommission);
         commissionWallet.transfer(commissionAmount);
         currentState = State.RELEASED;
-        emit ReleaseFund(buyer, seller, State.RELEASED, amountAfterCommission);
+        emit ReleaseFund(
+            msg.sender,
+            address(this),
+            amountAfterCommission,
+            commissionAmount
+        );
     }
 
     function withdrawFund() public stateFunded buyerOnly(msg.sender) {
@@ -189,7 +205,12 @@ contract Escrow {
         buyer.transfer(amountAfterCommission);
         commissionWallet.transfer(commissionAmount);
         currentState = State.REFUNDED;
-        emit Withdraw(msg.sender, amountAfterCommission, State.REFUNDED);
+        emit Withdraw(
+            msg.sender,
+            address(this),
+            amountAfterCommission,
+            commissionAmount
+        );
     }
 
     function calculateAmountToTransfer()
@@ -204,20 +225,11 @@ contract Escrow {
         return (amountAfterCommission, commissionAmount);
     }
 
-    function changeCommissionRate(uint256 _commissionRate)
-        public
-        initByOwner
-        ownerOnly
-        dealCommissionRate(_commissionRate)
-    {
-        commissionRate = _commissionRate;
-    }
-
-    function postSixMonths() public minimumTimePeriod ownerOnly {
+    function postSixMonths() public onlyOwner stateAccepted minimumTimePeriod {
         uint256 contractBalance = address(this).balance;
         owner.transfer(contractBalance);
-        currentState = State.WITHDRAWED_BY_OWNER;
-        emit SixMonths(owner, contractBalance);
+        currentState = State.WITHDRAWN_BY_OWNER;
+        emit SixMonths(owner, address(this), contractBalance);
     }
 
     function currentStateOfDeal() public view returns (State) {
