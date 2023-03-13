@@ -1,10 +1,10 @@
 module Escrow::Escrow {
   
   use std::signer;
-  use std::error;
   use aptos_framework::account;
   use aptos_framework::coin;
   use aptos_framework::aptos_coin::AptosCoin;
+  use aptos_framework::timestamp;
 
   //
   // Constants
@@ -35,6 +35,7 @@ module Escrow::Escrow {
   const EINVALID_AMOUNT: u64 = 5;
   const EINVALID_STATUS: u64 = 6;
   const EINVALID_TIME: u64 = 7;
+  const EINVALID_COMMISSION_RATE: u64 = 8;
 
   //
   // Data Type
@@ -66,12 +67,12 @@ module Escrow::Escrow {
   //
   #[view]
   public fun is_escrow_inited(): bool {
-    exists<EscrowInfo>(@Escrow)
+    exists<EscrowInfo>(account::create_resource_address(&@Escrow, INFO_SEED))
   }
   
   #[view]
   public fun calculate_amount_to_transfer(escrow_info: &mut EscrowInfo): (u64, u64) {
-      let deal_amount = coin::value(escrow_info.escrow_coins);
+      let deal_amount = coin::value(&escrow_info.escrow_coins);
       let amt_after_commission = deal_amount -
           ((deal_amount * escrow_info.commission_rate) / 100);
       let commission_amount = deal_amount - amt_after_commission;
@@ -90,17 +91,19 @@ module Escrow::Escrow {
     min_amount: u64,
     commission_rate: u64
   ) {
-    assert!(!is_escrow_inited(), ESCROW_ALREADY_INITED);
+    // initCheck
+    assert!(!is_escrow_inited(), EESCROW_ALREADY_INITED);
     let owner_addr = signer::address_of(owner);
-    let (resource_account, signer_cap) = account::create_resource_account(owner, INFO_SEED);
-    move_to<EscrowInfo>(resource_account, EscrowInfo {
+    let (resource_account, _) = account::create_resource_account(owner, INFO_SEED);
+    move_to<EscrowInfo>(&resource_account, EscrowInfo {
       owner_addr,
       min_amount,
       commission_rate,
       commission_wallet,
       buyer: owner_addr,
       seller: owner_addr,
-      status: ESCROW_INITED,
+      deposit_time: 0,
+      status: 0,
       escrow_coins: coin::zero<AptosCoin>()
     });
   }
@@ -113,10 +116,13 @@ module Escrow::Escrow {
     acquires EscrowInfo
   {
     let sender_addr = signer::address_of(sender);
-    let info_addr = account::create_resource_address(&@MultiSender, INFO_SEED);
+    let info_addr = account::create_resource_address(&@Escrow, INFO_SEED);
     let escrow_info = borrow_global_mut<EscrowInfo>(info_addr);
+    // initByOwner
     assert!(sender_addr == escrow_info.owner_addr, EINVALID_OWNER);
+    // differentWalletAddresses
     assert!(buyer != seller, EINVALID_PARTIES);
+    // differentWalletAddresses
     assert!(buyer != sender_addr, EINVALID_PARTIES);
 
     escrow_info.buyer = buyer;
@@ -129,7 +135,7 @@ module Escrow::Escrow {
   ) acquires EscrowInfo
   { 
     let sender_addr = signer::address_of(sender);
-    let info_addr = account::create_resource_address(&@MultiSender, INFO_SEED);
+    let info_addr = account::create_resource_address(&@Escrow, INFO_SEED);
     let escrow_info = borrow_global_mut<EscrowInfo>(info_addr);
     // partiese defined
     assert!(escrow_info.buyer != escrow_info.seller, EINVALID_PARTIES);
@@ -147,11 +153,11 @@ module Escrow::Escrow {
   }
 
   
-  public entry fun accept_deal() 
+  public entry fun accept_deal(sender: &signer) 
     acquires EscrowInfo
   {
     let sender_addr = signer::address_of(sender);
-    let info_addr = account::create_resource_address(&@MultiSender, INFO_SEED);
+    let info_addr = account::create_resource_address(&@Escrow, INFO_SEED);
     let escrow_info = borrow_global_mut<EscrowInfo>(info_addr);
     // state funded
     assert!(escrow_info.status == ESCROW_STATUS_FUNDED, EINVALID_STATUS);
@@ -160,11 +166,11 @@ module Escrow::Escrow {
     escrow_info.status = ESCROW_STATUS_ACCEPTED;
   }
 
-  public entry fun release_fund() 
+  public entry fun release_fund(sender: &signer) 
     acquires EscrowInfo 
   {
     let sender_addr = signer::address_of(sender);
-    let info_addr = account::create_resource_address(&@MultiSender, INFO_SEED);
+    let info_addr = account::create_resource_address(&@Escrow, INFO_SEED);
     let escrow_info = borrow_global_mut<EscrowInfo>(info_addr);
     // state accepted
     assert!(escrow_info.status == ESCROW_STATUS_ACCEPTED, EINVALID_STATUS);
@@ -189,11 +195,11 @@ module Escrow::Escrow {
     coin::deposit<AptosCoin>(escrow_info.commission_wallet, commision_coin);
   }
 
-  public entry fun withdraw_fund() 
+  public entry fun withdraw_fund(sender: &signer) 
     acquires EscrowInfo 
   {
     let sender_addr = signer::address_of(sender);
-    let info_addr = account::create_resource_address(&@MultiSender, INFO_SEED);
+    let info_addr = account::create_resource_address(&@Escrow, INFO_SEED);
     let escrow_info = borrow_global_mut<EscrowInfo>(info_addr);
     // state funded
     assert!(escrow_info.status == ESCROW_STATUS_FUNDED, EINVALID_STATUS);
@@ -222,8 +228,8 @@ module Escrow::Escrow {
     let sender_addr = signer::address_of(sender);
     let now_time = timestamp::now_seconds();
 
-    let info_addr = account::create_resource_address(&@MultiSender, INFO_SEED);
-    let escrow_info = borrow_global_mut<Escrow>(info_addr);
+    let info_addr = account::create_resource_address(&@Escrow, INFO_SEED);
+    let escrow_info = borrow_global_mut<EscrowInfo>(info_addr);
     // onlyowner
     assert!(sender_addr == escrow_info.owner_addr, EINVALID_OWNER);
     // minimum time period
@@ -245,10 +251,13 @@ module Escrow::Escrow {
   {
     let sender_addr = signer::address_of(sender);
 
-    let info_addr = account::create_resource_address(&@MultiSender, INFO_SEED);
-    let escrow_info = borrow_global_mut<Escrow>(info_addr);
+    let info_addr = account::create_resource_address(&@Escrow, INFO_SEED);
+    let escrow_info = borrow_global_mut<EscrowInfo>(info_addr);
     // onlyowner
     assert!(sender_addr == escrow_info.owner_addr, EINVALID_OWNER);
+
+    // dealCommisonRate
+    assert!(new_rate > 0 && new_rate < 100, EINVALID_COMMISSION_RATE);
 
     escrow_info.commission_rate = new_rate;
   }
