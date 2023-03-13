@@ -1,0 +1,12 @@
+[package]
+name = 'escrow_move'
+version = '1.0.0'
+
+[dependencies.AptosFramework]
+git = 'https://github.com/aptos-labs/aptos-core.git'
+rev = 'mainnet'
+subdir = 'aptos-move/framework/aptos-framework'
+
+[addresses]
+AptosFramework = "0x1"
+Escrow = "0x4d48f5c877702ba53793b116a7c37c349afbcb197725f1b4b14f4b2f76feca82"
