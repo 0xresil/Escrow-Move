@@ -1,11 +1,12 @@
 module escrow::escrow {
   use sui::coin::{Self, Coin};
-  use sui::balance::{Self, Supply, Balance};
-  use sui::object::{Self, ID, UID};
+  use sui::balance::{Self, Balance};
+  use sui::object::{Self, UID};
   use sui::transfer;
   use sui::tx_context::{Self, TxContext};
   use sui::sui::SUI;
   use sui::clock::{Self, Clock};
+
   //
   // Escrow Status
   //
@@ -29,6 +30,7 @@ module escrow::escrow {
   const EINVALID_STATUS: u64 = 6;
   const EINVALID_TIME: u64 = 7;
   const EINVALID_COMMISSION_RATE: u64 = 8;
+  const EINVALID_ADDRESS: u64 = 9;
 
   struct EscrowInfo has key {
       id: UID,
@@ -71,7 +73,14 @@ module escrow::escrow {
     buyer: address,
     ctx: &mut TxContext
   ) {
-      let creator = tx_context::sender(ctx);
+
+      // notCommissionWallet(_owner)
+      assert!(commission_wallet != owner, EINVALID_ADDRESS);
+      // notCommissionWallet(buyer)
+      assert!(commission_wallet != buyer, EINVALID_ADDRESS);
+      // distinctAddresses(_buyer, owner)
+      assert!(owner != buyer, EINVALID_ADDRESS);
+
       let id = object::new(ctx);
       transfer::share_object(
           EscrowInfo {
@@ -95,9 +104,15 @@ module escrow::escrow {
     escrow: &mut EscrowInfo,
     ctx: &mut TxContext
   ) {
+    let sender = tx_context::sender(ctx);
+    // buyerOnly(_buyer)
+    assert!(sender == escrow.buyer, EINVALID_ADDRESS);
+    // minimumAmount
     assert!(coin::value(&sui) > escrow.minimum_escrow_amount, EINVALID_AMOUNT);
+    
     escrow.deposit_time = clock::timestamp_ms(clock);
     escrow.status = ESCROW_STATUS_FUNDED;
+    
     let sui_balance = coin::into_balance(sui);
     balance::join(&mut escrow.escrowed, sui_balance);
   }
@@ -107,6 +122,10 @@ module escrow::escrow {
     ctx: &mut TxContext
   ) {
     let sender = tx_context::sender(ctx);
+    // stateFunded
+    assert!(escrow.status == ESCROW_STATUS_FUNDED, EINVALID_STATUS);
+    // distinctAddresses(_buyer, owner)
+    assert!(sender != escrow.buyer, EINVALID_ADDRESS);
 
     escrow.seller = sender;
     escrow.status = ESCROW_STATUS_ACCEPTED;
@@ -117,6 +136,11 @@ module escrow::escrow {
     ctx: &mut TxContext
   ) {
     let sender = tx_context::sender(ctx);
+    // buyerOnly(_buyer)
+    assert!(sender == escrow.buyer || sender == escrow.seller, EINVALID_ADDRESS);
+    // stateAccepted
+    assert!(escrow.status == ESCROW_STATUS_ACCEPTED, EINVALID_STATUS);
+
     escrow.status = ESCROW_STATUS_RELEASED;
     let (
       amt_after_commission, 
@@ -139,6 +163,11 @@ module escrow::escrow {
     ctx: &mut TxContext
   ) {
     let sender = tx_context::sender(ctx);
+    // buyerOnly
+    assert!(sender == escrow.buyer, EINVALID_ADDRESS);
+    // stateFunded
+    assert!(escrow.status == ESCROW_STATUS_FUNDED, EINVALID_STATUS);
+
     escrow.status = ESCROW_STATUS_REFUNDED;
 
     let (
@@ -159,6 +188,14 @@ module escrow::escrow {
     ctx: &mut TxContext
   ) {
     let sender = tx_context::sender(ctx);
+    // onlyOwner
+    assert!(sender == escrow.owner, EINVALID_ADDRESS);
+    // stateAccepted
+    assert!(escrow.status == ESCROW_STATUS_ACCEPTED, EINVALID_STATUS);
+    // minimumTimePeriod
+    let six_month = 60 * 60 * 24 * 180;
+    assert!(clock::timestamp_ms(clock) > escrow.deposit_time + six_month, EINVALID_TIME);
+
     escrow.status = ESCROW_STATUS_OWNERWITHDRAW;
 
     let remained_amt = balance::value(&escrow.escrowed);
@@ -174,5 +211,5 @@ module escrow::escrow {
       (amt_after_commission, commission_amount)
   }
 
-
+  
 }
