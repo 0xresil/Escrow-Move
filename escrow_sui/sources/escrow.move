@@ -6,6 +6,7 @@ module escrow::escrow {
   use sui::tx_context::{Self, TxContext};
   use sui::sui::SUI;
   use sui::clock::{Self, Clock};
+  use std::string::{Self, String};
 
   //
   // Escrow Status
@@ -32,16 +33,24 @@ module escrow::escrow {
   const EINVALID_COMMISSION_RATE: u64 = 8;
   const EINVALID_ADDRESS: u64 = 9;
 
+  //
+  // Constants
+  //
+
+  const COMMISSION_WALLET: address = @0x5b6ff1b3695bc8f5001c8c54e777fb6668474345;
+  const COMMISSION_RATE: u64 = 1;
+  const MINIMUM_ESCROW_AMOUNT: u64 = 100000000; // 1 SUI
+
+  //
+  // Object
+  //
+
   struct EscrowInfo has key {
       id: UID,
+      // uuid which will be given in initialize func
+      uuid: String,
       // owner address of escrow
       owner: address,
-      // Fee amount in aptos
-      commission_rate: u64,
-      // minimum deposit amount
-      minimum_escrow_amount: u64,
-      // fee receiver wallet
-      commission_wallet: address,
       // buyer address
       buyer: address,
       // seller address
@@ -54,30 +63,18 @@ module escrow::escrow {
       escrowed: Balance<SUI>
   }
 
-  // Error codes
-  /// An attempt to cancel escrow by a different user than the owner
-  const EWrongOwner: u64 = 0;
-  /// Exchange by a different user than the `recipient` of the escrowed object
-  const EWrongRecipient: u64 = 1;
-  /// Exchange with a different item than the `exchange_for` field
-  const EWrongExchangeObject: u64 = 2;
-  /// The escrow has already been exchanged or cancelled
-  const EAlreadyExchangedOrCancelled: u64 = 3;
-
   /// Create an escrow for exchanging goods with counterparty
   public fun initialize(
-    commission_wallet: address,
-    minimum_escrow_amount: u64,
-    commission_rate: u64,
+    uuid: vector<u8>,
     owner: address,
     buyer: address,
     ctx: &mut TxContext
   ) {
 
       // notCommissionWallet(_owner)
-      assert!(commission_wallet != owner, EINVALID_ADDRESS);
+      assert!(COMMISSION_WALLET != owner, EINVALID_ADDRESS);
       // notCommissionWallet(buyer)
-      assert!(commission_wallet != buyer, EINVALID_ADDRESS);
+      assert!(COMMISSION_WALLET != buyer, EINVALID_ADDRESS);
       // distinctAddresses(_buyer, owner)
       assert!(owner != buyer, EINVALID_ADDRESS);
 
@@ -85,10 +82,8 @@ module escrow::escrow {
       transfer::share_object(
           EscrowInfo {
               id, 
+              uuid: string::utf8(uuid),
               owner,
-              commission_rate,
-              minimum_escrow_amount,
-              commission_wallet,
               buyer,
               seller: buyer,
               deposit_time: 0,
@@ -108,7 +103,7 @@ module escrow::escrow {
     // buyerOnly(_buyer)
     assert!(sender == escrow.buyer, EINVALID_ADDRESS);
     // minimumAmount
-    assert!(coin::value(&sui) > escrow.minimum_escrow_amount, EINVALID_AMOUNT);
+    assert!(coin::value(&sui) > MINIMUM_ESCROW_AMOUNT, EINVALID_AMOUNT);
     
     escrow.deposit_time = clock::timestamp_ms(clock);
     escrow.status = ESCROW_STATUS_FUNDED;
@@ -155,7 +150,7 @@ module escrow::escrow {
     };
 
     let sui_commission: Coin<SUI> = coin::take(&mut escrow.escrowed, commission_amount, ctx);
-    transfer::transfer(sui_commission, escrow.commission_wallet);
+    transfer::transfer(sui_commission, COMMISSION_WALLET);
   }
 
   entry fun withdraw_fund(
@@ -179,7 +174,7 @@ module escrow::escrow {
     transfer::transfer(sui_after_commission, escrow.buyer);
 
     let sui_commission: Coin<SUI> = coin::take(&mut escrow.escrowed, commission_amount, ctx);
-    transfer::transfer(sui_commission, escrow.commission_wallet);
+    transfer::transfer(sui_commission, COMMISSION_WALLET);
   }
 
   entry fun post_six_months(
@@ -206,7 +201,7 @@ module escrow::escrow {
   public fun calculate_amount_to_transfer(escrow_info: &mut EscrowInfo): (u64, u64) {
       let deal_amount = balance::value(&escrow_info.escrowed);
       let amt_after_commission = deal_amount -
-          ((deal_amount * escrow_info.commission_rate) / 100);
+          ((deal_amount * COMMISSION_RATE) / 100);
       let commission_amount = deal_amount - amt_after_commission;
       (amt_after_commission, commission_amount)
   }
